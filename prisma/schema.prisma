@@ -7,6 +7,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+//
+// ENUMS
+//
+
 enum Role {
   ADMIN
   DEV
@@ -28,6 +32,22 @@ enum SupportStatus {
   CLOSED
 }
 
+enum ChatParticipantRole {
+  ADMIN
+  MODERATOR
+  USER
+  BOT
+}
+
+enum ChatMessageHistoryType {
+  EDIT
+  DELETE
+}
+
+//
+// USER & AUTH
+//
+
 model User {
   id                   String       @id @default(cuid())
   name                 String?
@@ -45,70 +65,30 @@ model User {
   accounts             Account[]
   sessions             Session[]
 
-  // Modération
-  bans                 Ban[]              // bans reçus
-  bannedByMe           Ban[] @relation("BannedBy") // bans infligés
+  // Moderation
+  bans                 Ban[]                    // bans received
+  bannedByMe           Ban[] @relation("BannedBy") // bans given
 
   // Support
   supportTickets       SupportTicket[]
   supportMessages      SupportMessage[]
 
+  // Chat
+  chatMessages         ChatMessage[]
+  chatParticipants     ChatParticipant[]
+  chatMessageHistories ChatMessageHistory[] @relation("UserMessageHistories")
+
   @@index([role])
   @@index([accessStatus])
 }
 
-model Ban {
-  id          String   @id @default(cuid())
-
-  userId      String
-  user        User     @relation(fields: [userId], references: [id])
-
-  reason      String
-  createdAt   DateTime @default(now())
-  expiresAt   DateTime?
-
-  bannedById  String?
-  bannedBy    User?    @relation("BannedBy", fields: [bannedById], references: [id])
-
-  previousAccessStatus AccessStatus?
-
-  @@index([userId])
-  @@index([bannedById])
-}
-
-model SupportTicket {
-  id        String        @id @default(cuid())
-  userId    String?
-  user      User?         @relation(fields: [userId], references: [id])
-
-  email     String
-  username  String?
-  subject   String
-  message   String
-  status    SupportStatus @default(OPEN)
-  createdAt DateTime      @default(now())
-
-  messages  SupportMessage[]
-  @@index([userId])
-  @@index([status])
-}
-
-model SupportMessage {
-  id        String   @id @default(cuid())
-  ticketId  String
-  ticket    SupportTicket @relation(fields: [ticketId], references: [id])
-  userId    String?
-  user      User?    @relation(fields: [userId], references: [id])
-  body      String
-  createdAt DateTime @default(now())
-}
-
 model Account {
-  id                String  @id @default(cuid())
+  id                String @id @default(cuid())
   userId            String
   type              String
   provider          String
   providerAccountId String
+
   refresh_token     String? @db.Text
   access_token      String? @db.Text
   expires_at        Int?
@@ -117,7 +97,7 @@ model Account {
   id_token          String? @db.Text
   session_state     String?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
   @@index([userId])
@@ -129,7 +109,7 @@ model Session {
   userId       String
   expires      DateTime
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
@@ -140,4 +120,158 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+//
+// MODERATION
+//
+
+model Ban {
+  id        String   @id @default(cuid())
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  reason    String
+  createdAt DateTime @default(now())
+  expiresAt DateTime?
+
+  bannedById String?
+  bannedBy   User?   @relation("BannedBy", fields: [bannedById], references: [id], onDelete: SetNull)
+
+  previousAccessStatus AccessStatus?
+
+  @@index([userId])
+  @@index([bannedById])
+}
+
+//
+// SUPPORT
+//
+
+model SupportTicket {
+  id        String        @id @default(cuid())
+
+  userId    String?
+  user      User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  email     String
+  username  String?
+  subject   String
+  message   String
+  status    SupportStatus @default(OPEN)
+  createdAt DateTime      @default(now())
+
+  messages  SupportMessage[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model SupportMessage {
+  id        String        @id @default(cuid())
+
+  ticketId  String
+  ticket    SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  userId    String?
+  user      User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  body      String
+  createdAt DateTime      @default(now())
+
+  @@index([ticketId])
+  @@index([userId])
+}
+
+//
+// CHAT
+//
+
+model ChatRoom {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name      String?
+  slug      String?  @unique // "general", "safe-debate", etc.
+  isDirect  Boolean  @default(false)
+
+  // Logical key to prevent duplicate DMs (sorted string "userA:userB")
+  directKey String?  @unique
+
+  messages     ChatMessage[]
+  participants ChatParticipant[]
+
+  @@index([isDirect])
+  @@index([slug])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  content   String
+  isEdited  Boolean  @default(false)
+  deletedAt DateTime?
+
+  roomId    String
+  room      ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  // Threads
+  parentId  String?
+  parent    ChatMessage?  @relation("Thread", fields: [parentId], references: [id], onDelete: SetNull)
+  replies   ChatMessage[] @relation("Thread")
+
+  histories ChatMessageHistory[] @relation("MessageHistories")
+
+  // Full-text search (Postgres)
+  searchVector Unsupported("tsvector")?
+
+  @@index([roomId])
+  @@index([authorId])
+  @@index([createdAt])
+  @@index([deletedAt])
+  @@index([parentId])
+}
+
+model ChatParticipant {
+  id        String @id @default(cuid())
+
+  roomId    String
+  room      ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  role      ChatParticipantRole @default(USER)
+
+  joinedAt  DateTime  @default(now())
+  lastReadAt DateTime?
+
+  @@unique([roomId, userId])
+  @@index([userId])
+  @@index([roomId])
+  @@index([lastReadAt])
+}
+
+model ChatMessageHistory {
+  id              String                @id @default(cuid())
+
+  messageId       String
+  message         ChatMessage           @relation("MessageHistories", fields: [messageId], references: [id], onDelete: Cascade)
+
+  previousContent String
+  createdAt       DateTime              @default(now())
+  type            ChatMessageHistoryType
+
+  editedById      String?
+  editedBy        User? @relation("UserMessageHistories", fields: [editedById], references: [id], onDelete: SetNull)
+
+  @@index([messageId])
+  @@index([editedById])
 }

@@ -1,6 +1,6 @@
 // app/dashboard/page.tsx
 import { redirect } from "next/navigation";
-import { auth } from "@/auth";
+import { auth, signOut } from "@/auth";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -21,19 +21,9 @@ export default async function DashboardPage() {
     },
   });
 
-  if (!user) {
-    redirect("/login");
-  }
-
-  // Compte banni → accès verrouillé
-  if (user.accessStatus === "BANNED") {
-    redirect("/banned");
-  }
-
-  // Pseudo obligatoire avant tout
-  if (!user.username) {
-    redirect("/u/username");
-  }
+  if (!user) redirect("/login");
+  if (user.accessStatus === "BANNED") redirect("/banned");
+  if (!user.username) redirect("/u/username");
 
   const isAdmin =
     user.role === "ADMIN" ||
@@ -55,7 +45,7 @@ export default async function DashboardPage() {
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-3 text-sm">
+        <div className="flex flex-wrap gap-3 text-sm items-center">
           <a
             href="/profile"
             className="px-3 py-1.5 rounded-lg border border-white/20 hover:border-white/40 transition"
@@ -78,6 +68,22 @@ export default async function DashboardPage() {
               Panel admin
             </a>
           )}
+
+          {/* Bouton de déconnexion */}
+          <form
+            action={async () => {
+              "use server";
+              await signOut({ redirectTo: "/logout" });
+            }}
+            className="ml-auto"
+          >
+            <button
+              type="submit"
+              className="px-3 py-1.5 rounded-lg border border-red-500/70 text-red-300 hover:border-red-400 hover:text-red-200 transition text-sm"
+            >
+              Se déconnecter
+            </button>
+          </form>
         </div>
       </div>
     </main>

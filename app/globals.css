@@ -24,3 +24,82 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes typingDot {
+  0% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-2px);
+    opacity: 1;
+  }
+  60% {
+    transform: translateY(0);
+    opacity: 0.6;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+}
+/* ===== Scrollbar "TalkTo" ===== */
+
+/* Firefox */
+.scrollbar-talkto {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148,163,184,0.35) transparent; /* thumb / track */
+}
+
+/* Chromium / Safari */
+.scrollbar-talkto::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.scrollbar-talkto::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-talkto::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    rgba(99,102,241,0.55),
+    rgba(34,211,238,0.45)
+  );
+  border-radius: 999px;
+  border: 2px solid rgba(2,6,23,0.9); /* "gap" visuel sans changer width */
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,0.08),
+    0 0 18px rgba(34,211,238,0.25);
+}
+
+.scrollbar-talkto::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(129,140,248,0.9),
+    rgba(34,211,238,0.8)
+  );
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,0.14),
+    0 0 22px rgba(99,102,241,0.35);
+}
+
+.scrollbar-talkto::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Variante "invisible until hover" */
+.scrollbar-talkto.scrollbar-idle::-webkit-scrollbar-thumb {
+  background: rgba(148,163,184,0.10);
+  box-shadow: none;
+}
+.scrollbar-talkto.scrollbar-idle:hover::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    rgba(99,102,241,0.55),
+    rgba(34,211,238,0.45)
+  );
+}
+
+
