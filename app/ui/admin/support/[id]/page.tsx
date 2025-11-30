@@ -40,9 +40,7 @@ export default async function AdminSupportDetailPage({
     },
   });
 
-  if (!ticket) {
-    notFound();
-  }
+  if (!ticket) notFound();
 
   const requester =
     ticket.username ??
@@ -51,6 +49,32 @@ export default async function AdminSupportDetailPage({
     "Utilisateur inconnu";
 
   const isLinkedToUser = !!ticket.user;
+
+  // ✅ NORMALISATION pour matcher TicketForAdmin
+  const ticketForAdmin = {
+    ...ticket,
+    status: ticket.status as any,
+    createdAt: ticket.createdAt.toISOString(),
+    user: ticket.user
+      ? {
+          ...ticket.user,
+          role: ticket.user.role as any,
+          accessStatus: ticket.user.accessStatus as any,
+        }
+      : null,
+    messages: ticket.messages.map((m) => ({
+      id: m.id,
+      body: m.body,
+      createdAt: m.createdAt.toISOString(),
+      user: m.user
+        ? {
+            id: m.user.id,
+            username: m.user.username,
+            role: m.user.role as any,
+          }
+        : null,
+    })),
+  };
 
   return (
     <section className="space-y-6">
@@ -139,7 +163,8 @@ export default async function AdminSupportDetailPage({
             </p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-black/60 px-3 py-3 lg:px-4 lg:py-4">
-            <AdminTicketConversation ticket={ticket} />
+            {/* ✅ on passe la version normalisée */}
+            <AdminTicketConversation ticket={ticketForAdmin as any} />
           </div>
         </div>
 
@@ -152,9 +177,7 @@ export default async function AdminSupportDetailPage({
               <Row label="Sujet">
                 <span className="line-clamp-2">{ticket.subject}</span>
               </Row>
-              <Row label="Demandeur">
-                {requester}
-              </Row>
+              <Row label="Demandeur">{requester}</Row>
               {ticket.user && (
                 <Row label="Rôle user">
                   <span className="font-mono">{ticket.user.role}</span>
@@ -165,9 +188,7 @@ export default async function AdminSupportDetailPage({
                   <span className="font-mono">{ticket.user.accessStatus}</span>
                 </Row>
               )}
-              <Row label="Créé le">
-                {formatDate(ticket.createdAt)}
-              </Row>
+              <Row label="Créé le">{formatDate(ticket.createdAt)}</Row>
               <Row label="ID ticket">
                 <span className="font-mono">{ticket.id}</span>
               </Row>
@@ -220,10 +241,7 @@ async function updateTicketStatus(formData: FormData) {
   const id = formData.get("id") as string;
   const status = formData.get("status") as string;
 
-  if (!id || !status) {
-    redirect("/ui/admin/support");
-  }
-
+  if (!id || !status) redirect("/ui/admin/support");
   if (!["OPEN", "IN_PROGRESS", "CLOSED"].includes(status)) {
     redirect(`/ui/admin/support/${id}`);
   }
