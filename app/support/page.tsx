@@ -38,10 +38,11 @@ export default async function SupportPage() {
     (t) => t.status === "OPEN" || t.status === "IN_PROGRESS"
   ).length;
 
+  // ✅ FIX: cast enums Prisma -> enums client
   const ticketsForClient = tickets.map((t) => ({
     id: t.id,
     subject: t.subject,
-    status: t.status,
+    status: t.status as any, // SupportStatus côté client
     createdAt: t.createdAt.toISOString(),
     messages: t.messages.map((m) => ({
       id: m.id,
@@ -51,7 +52,7 @@ export default async function SupportPage() {
         ? {
             id: m.user.id,
             username: m.user.username,
-            role: m.user.role,
+            role: m.user.role as any, // Role côté client
           }
         : null,
     })),
