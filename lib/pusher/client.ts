@@ -8,8 +8,6 @@ export const pusherClient = new PusherClient(
   {
     cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
     authEndpoint: "/api/pusher/auth",
-    auth: {
-      withCredentials: true,
-    },
+    // ✅ pas de withCredentials : cookies same-origin envoyés par défaut
   }
 );
