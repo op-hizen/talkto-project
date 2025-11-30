@@ -245,6 +245,24 @@ type MsgItem = {
 };
 type VItem = DayItem | UnreadItem | MsgItem;
 
+/* ---------------- SCROLL UTILS (FIX TS) ---------------- */
+
+// Retourne toujours un HTMLElement scrollable si possible.
+function getScrollableEl(
+  el: HTMLElement | Window | null
+): HTMLElement | null {
+  if (!el) return null;
+  if (el instanceof HTMLElement) return el;
+
+  // cas Window : on prend l'élément qui scrolle réellement
+  const scrolling = document.scrollingElement;
+  if (scrolling instanceof HTMLElement) return scrolling;
+
+  return document.documentElement instanceof HTMLElement
+    ? document.documentElement
+    : null;
+}
+
 /* ---------------- MAIN ---------------- */
 
 const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient(
@@ -303,7 +321,10 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
   /* ---------- REFS ---------- */
 
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-  const scrollerRef = useRef<HTMLElement | null>(null);
+
+  // ✅ FIX: accepte Window aussi
+  const scrollerRef = useRef<HTMLElement | Window | null>(null);
+
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const isNearBottomRef = useRef(true);
@@ -516,6 +537,104 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
     };
   }, [markAllReadIfAtBottom]);
 
+  /* ---------- GROUPING + DAY + UNREAD ---------- */
+
+  const unreadMarkerId = useMemo(() => {
+    if (!lastReadAt) return null;
+    const t = new Date(lastReadAt).getTime();
+    const firstUnread = messages.find(
+      (m) => new Date(m.createdAt).getTime() > t
+    );
+    return firstUnread?.id ?? null;
+  }, [messages, lastReadAt]);
+
+  const items: VItem[] = useMemo(() => {
+    const out: VItem[] = [];
+    let lastDayKey: string | null = null;
+    let prevMsg: Message | null = null;
+
+    let prevGroupMeta:
+      | { startIdx: number; groupIndex: number; groupSize: number }
+      | null = null;
+
+    messages.forEach((m, index) => {
+      if (unreadMarkerId && m.id === unreadMarkerId) {
+        out.push({ type: "unread", key: `unread-${m.id}` });
+        prevMsg = null;
+        prevGroupMeta = null;
+      }
+
+      const d = new Date(m.createdAt);
+      const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+
+      if (dayKey !== lastDayKey) {
+        out.push({
+          type: "day",
+          key: `day-${dayKey}`,
+          label: dayLabel(m.createdAt),
+        });
+        lastDayKey = dayKey;
+        prevMsg = null;
+        prevGroupMeta = null;
+      }
+
+      const groupedWithPrev =
+        !!prevMsg &&
+        prevMsg.author.id === m.author.id &&
+        !prevMsg.deletedAt &&
+        !m.deletedAt &&
+        d.getTime() - new Date(prevMsg.createdAt).getTime() < GROUP_WINDOW_MS;
+
+      let groupIndex = 0;
+      let groupSize = 1;
+
+      if (groupedWithPrev && prevGroupMeta) {
+        groupIndex = prevGroupMeta.groupIndex + 1;
+        groupSize = prevGroupMeta.groupSize + 1;
+      }
+
+      const item: MsgItem = {
+        type: "msg",
+        key: m.id,
+        msg: m,
+        index,
+        groupedWithPrev,
+        groupIndex,
+        groupSize,
+      };
+
+      out.push(item);
+
+      if (!groupedWithPrev) {
+        prevGroupMeta = {
+          startIdx: out.length - 1,
+          groupIndex: 0,
+          groupSize: 1,
+        };
+      } else if (prevGroupMeta) {
+        prevGroupMeta.groupSize = groupSize;
+        prevGroupMeta.groupIndex = groupIndex;
+
+        for (let k = prevGroupMeta.startIdx; k < out.length; k++) {
+          const it2 = out[k];
+          if (it2.type === "msg") it2.groupSize = groupSize;
+        }
+      }
+
+      prevMsg = m;
+    });
+
+    return out;
+  }, [messages, unreadMarkerId]);
+
+  useEffect(() => {
+    const map: Record<string, number> = {};
+    items.forEach((it, idx) => {
+      if (it.type === "msg") map[it.msg.id] = idx;
+    });
+    indexByMessageIdRef.current = map;
+  }, [items]);
+
   /* ---------- SCROLL HELPERS ---------- */
 
   const scrollToBottom = useCallback((smooth = true) => {
@@ -526,7 +645,7 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
     });
     setNewBelowCount(0);
     isNearBottomRef.current = true;
-  }, []);
+  }, [items.length]);
 
   const scrollToMessage = useCallback((messageId: string) => {
     const idx = indexByMessageIdRef.current[messageId];
@@ -908,106 +1027,6 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
     markAllReadIfAtBottom,
   ]);
 
-  /* ---------- UNREAD MARKER ---------- */
-
-  const unreadMarkerId = useMemo(() => {
-    if (!lastReadAt) return null;
-    const t = new Date(lastReadAt).getTime();
-    const firstUnread = messages.find(
-      (m) => new Date(m.createdAt).getTime() > t
-    );
-    return firstUnread?.id ?? null;
-  }, [messages, lastReadAt]);
-
-  /* ---------- GROUPING + DAY + UNREAD ---------- */
-
-  const items: VItem[] = useMemo(() => {
-    const out: VItem[] = [];
-    let lastDayKey: string | null = null;
-    let prevMsg: Message | null = null;
-
-    let prevGroupMeta:
-      | { startIdx: number; groupIndex: number; groupSize: number }
-      | null = null;
-
-    messages.forEach((m, index) => {
-      if (unreadMarkerId && m.id === unreadMarkerId) {
-        out.push({ type: "unread", key: `unread-${m.id}` });
-        prevMsg = null;
-        prevGroupMeta = null;
-      }
-
-      const d = new Date(m.createdAt);
-      const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-
-      if (dayKey !== lastDayKey) {
-        out.push({
-          type: "day",
-          key: `day-${dayKey}`,
-          label: dayLabel(m.createdAt),
-        });
-        lastDayKey = dayKey;
-        prevMsg = null;
-        prevGroupMeta = null;
-      }
-
-      const groupedWithPrev =
-        !!prevMsg &&
-        prevMsg.author.id === m.author.id &&
-        !prevMsg.deletedAt &&
-        !m.deletedAt &&
-        d.getTime() - new Date(prevMsg.createdAt).getTime() < GROUP_WINDOW_MS;
-
-      let groupIndex = 0;
-      let groupSize = 1;
-
-      if (groupedWithPrev && prevGroupMeta) {
-        groupIndex = prevGroupMeta.groupIndex + 1;
-        groupSize = prevGroupMeta.groupSize + 1;
-      }
-
-      const item: MsgItem = {
-        type: "msg",
-        key: m.id,
-        msg: m,
-        index,
-        groupedWithPrev,
-        groupIndex,
-        groupSize,
-      };
-
-      out.push(item);
-
-      if (!groupedWithPrev) {
-        prevGroupMeta = {
-          startIdx: out.length - 1,
-          groupIndex: 0,
-          groupSize: 1,
-        };
-      } else if (prevGroupMeta) {
-        prevGroupMeta.groupSize = groupSize;
-        prevGroupMeta.groupIndex = groupIndex;
-
-        for (let k = prevGroupMeta.startIdx; k < out.length; k++) {
-          const it2 = out[k];
-          if (it2.type === "msg") it2.groupSize = groupSize;
-        }
-      }
-
-      prevMsg = m;
-    });
-
-    return out;
-  }, [messages, unreadMarkerId]);
-
-  useEffect(() => {
-    const map: Record<string, number> = {};
-    items.forEach((it, idx) => {
-      if (it.type === "msg") map[it.msg.id] = idx;
-    });
-    indexByMessageIdRef.current = map;
-  }, [items]);
-
   /* ---------- MENTION CACHE ---------- */
 
   const mentionPartsByMsgId = useMemo(() => {
@@ -1061,10 +1080,11 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
     !!input.trim() &&
     !(isSafeDebate && cooldownRemaining !== null && cooldownRemaining > 0);
 
-  /* ---------- SCROLLER ---------- */
+  /* ---------- SCROLLER (FIXED) ---------- */
 
   const handleScroll = useCallback(() => {
-    const el = scrollerRef.current;
+    const rawEl = scrollerRef.current;
+    const el = getScrollableEl(rawEl);
     if (!el) return;
 
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -1218,7 +1238,7 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
               </button>
             )}
 
-            {/* Header line: pseudo big, role tiny */}
+            {/* Header line */}
             <div className="flex items-center gap-2">
               {!groupedWithPrev ? (
                 <>
@@ -1273,7 +1293,7 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
                 : renderContentWithMentions(m.id, displayContent)}
             </div>
 
-            {/* Actions zone fixed height, open only if selected */}
+            {/* Actions */}
             <div className="mt-1 min-h-[18px]">
               <AnimatePresence initial={false}>
                 {isSelected && (
@@ -1416,7 +1436,10 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
           firstItemIndex={firstItemIndex}
           startReached={loadOlder}
           followOutput="smooth"
-          scrollerRef={(el) => (scrollerRef.current = el)}
+          // ✅ FIX: accepte HTMLElement | Window | null
+          scrollerRef={(el) => {
+            scrollerRef.current = el;
+          }}
           onScroll={handleScroll}
           atBottomStateChange={(atBottom) => {
             isNearBottomRef.current = atBottom;
