@@ -13,6 +13,7 @@ import React, {
 } from "react";
 import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
+import type { Variants } from "framer-motion";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { pusherClient } from "@/lib/pusher/client";
 import {
@@ -144,7 +145,7 @@ const toastVariants = {
     scale: 0.98,
     transition: { duration: 0.18, ease: "easeIn" },
   },
-};
+} satisfies Variants;
 
 const replyBarVariants = {
   hidden: { opacity: 0, y: 6 },
@@ -1369,7 +1370,9 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
                 <span className="text-slate-500"> — </span>
                 <span>{toast.preview}</span>
               </div>
-              <div className="mt-1 text-[10px] text-slate-500">Cliquer pour voir</div>
+              <div className="mt-1 text-[10px] text-slate-500">
+                Cliquer pour voir
+              </div>
             </button>
           </motion.div>
         )}
@@ -1548,7 +1551,9 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
               className="w-full bg-transparent resize-none outline-none text-sm max-h-28 text-slate-100 placeholder:text-slate-500"
             />
             <div className="flex justify-between items-center mt-1 text-[10px] text-slate-500">
-              <span>{input.length}/{MAX_LEN}</span>
+              <span>
+                {input.length}/{MAX_LEN}
+              </span>
               {editingMessageId && (
                 <span className="text-indigo-300">Mode édition</span>
               )}
