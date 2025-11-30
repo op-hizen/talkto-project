@@ -22,21 +22,24 @@ type TypingUser = {
 
 type TypingState = TypingUser[];
 
-const TYPING_EVENT = "talkto:typing";
+const TYPING_EVENT = "talkto:typing" as const;
 const TYPING_TIMEOUT = 3500;
+
+/* ---------------- HOOK ---------------- */
 
 export function useTypingPresence(roomId: string) {
   const [users, setUsers] = useState<TypingState>([]);
   const roomIdRef = useRef(roomId);
 
+  // reset quand on change de room
   useEffect(() => {
     roomIdRef.current = roomId;
     setUsers([]);
   }, [roomId]);
 
-  // écoute des events
+  // écoute des events typing
   useEffect(() => {
-    function handleEvent(e: Event) {
+    const handleEvent = (e: Event) => {
       if (!(e instanceof CustomEvent)) return;
 
       const detail = e.detail as TypingPresencePayload | undefined;
@@ -44,22 +47,23 @@ export function useTypingPresence(roomId: string) {
       if (detail.roomId !== roomIdRef.current) return;
 
       const { isTyping, userId, username, source } = detail;
-      if (!userId) return; // on ignore les events sans id
+      if (!userId) return; // ignore sans id
 
       const now = Date.now();
 
       setUsers((prev) => {
-        // on enlève tout ce qui est expiré
+        // purge des entrées expirées
         const filtered = prev.filter(
           (u) => now - u.lastUpdate < TYPING_TIMEOUT
         );
 
+        // user stop typing
         if (!isTyping) {
-          // cet utilisateur arrête d’écrire
           return filtered.filter((u) => u.userId !== userId);
         }
 
         const idx = filtered.findIndex((u) => u.userId === userId);
+
         const entry: TypingUser = {
           userId,
           username: username ?? null,
@@ -67,32 +71,39 @@ export function useTypingPresence(roomId: string) {
           lastUpdate: now,
         };
 
-        if (idx === -1) {
-          return [...filtered, entry];
-        }
+        // new user typing
+        if (idx === -1) return [...filtered, entry];
 
-        const copy = [...filtered];
+        // update existing
+        const copy = filtered.slice();
         copy[idx] = { ...copy[idx], ...entry };
         return copy;
       });
-    }
+    };
 
-    window.addEventListener(TYPING_EVENT, handleEvent as EventListener);
+    window.addEventListener(
+      TYPING_EVENT,
+      handleEvent as EventListener
+    );
+
     return () => {
-      window.removeEventListener(TYPING_EVENT, handleEvent as EventListener);
+      window.removeEventListener(
+        TYPING_EVENT,
+        handleEvent as EventListener
+      );
     };
   }, []);
 
-  // nettoyage périodique (au cas où aucun event ne tombe)
+  // nettoyage périodique
   useEffect(() => {
-    const id = setInterval(() => {
+    const id = window.setInterval(() => {
       const now = Date.now();
       setUsers((prev) =>
         prev.filter((u) => now - u.lastUpdate < TYPING_TIMEOUT)
       );
     }, 1000);
 
-    return () => clearInterval(id);
+    return () => window.clearInterval(id);
   }, []);
 
   return {
@@ -101,11 +112,14 @@ export function useTypingPresence(roomId: string) {
   };
 }
 
+/* ---------------- EMITTER ---------------- */
+
 export function emitTypingPresence(payload: TypingPresencePayload) {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(
-    new CustomEvent<TypING_EVENT>(TYPING_EVENT as any, {
-      detail: payload,
-    }) as any
-  );
+
+  const ev = new CustomEvent<TypingPresencePayload>(TYPING_EVENT, {
+    detail: payload,
+  });
+
+  window.dispatchEvent(ev);
 }
