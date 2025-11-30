@@ -66,8 +66,8 @@ model User {
   sessions             Session[]
 
   // Moderation
-  bans                 Ban[]                    // bans received
-  bannedByMe           Ban[] @relation("BannedBy") // bans given
+  bans                 Ban[]
+  bannedByMe           Ban[] @relation("BannedBy")
 
   // Support
   supportTickets       SupportTicket[]
@@ -194,7 +194,7 @@ model ChatRoom {
   updatedAt DateTime @updatedAt
 
   name      String?
-  slug      String?  @unique // "general", "safe-debate", etc.
+  slug      String?  @unique
   isDirect  Boolean  @default(false)
 
   // Logical key to prevent duplicate DMs (sorted string "userA:userB")
