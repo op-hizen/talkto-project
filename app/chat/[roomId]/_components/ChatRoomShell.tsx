@@ -2,14 +2,12 @@
 "use client";
 
 import React, { useMemo, useRef, useState } from "react";
-import ChatRoomClient, {
-  Message,
-  ChatRoomHandle,
-} from "../ChatRoomClient";
+import ChatRoomClient, { Message, ChatRoomHandle } from "../ChatRoomClient";
 import { TypingIndicator } from "./TypingIndicator";
 import { useTypingPresence } from "../_hooks/useTypingPresence";
 import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
+import type { Variants } from "framer-motion";
 import SearchPanel from "./SearchPanel";
 
 type Participant = {
@@ -31,7 +29,9 @@ type ChatRoomShellProps = {
   participants: Participant[];
 };
 
-const STAFF_ROLES = ["ADMIN", "DEV", "MODERATOR", "SUPPORT"];
+const STAFF_ROLES = ["ADMIN", "DEV", "MODERATOR", "SUPPORT"] as const;
+
+/* ---------------- MOTION VARIANTS (FIX TS) ---------------- */
 
 const shellVariants = {
   hidden: { opacity: 0, y: 14, scale: 0.992 },
@@ -39,20 +39,36 @@ const shellVariants = {
     opacity: 1,
     y: 0,
     scale: 1,
-    transition: { duration: 0.5, ease: "easeOut" },
+    transition: { duration: 0.5, ease: "easeOut" as const },
   },
-};
+} satisfies Variants;
 
 const headerVariants = {
   hidden: { opacity: 0, y: -6 },
-  show: { opacity: 1, y: 0, transition: { delay: 0.04, duration: 0.35 } },
-};
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: { delay: 0.04, duration: 0.35 },
+  },
+} satisfies Variants;
 
 const cardVariants = {
   hidden: { opacity: 0, y: 8, scale: 0.985 },
-  show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.22 } },
-  exit: { opacity: 0, y: 6, scale: 0.985, transition: { duration: 0.16 } },
-};
+  show: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: { duration: 0.22 },
+  },
+  exit: {
+    opacity: 0,
+    y: 6,
+    scale: 0.985,
+    transition: { duration: 0.16 },
+  },
+} satisfies Variants;
+
+/* ---------------- MAIN ---------------- */
 
 export function ChatRoomShell({
   roomId,
@@ -104,12 +120,14 @@ export function ChatRoomShell({
 
   const renderFloatingCard = () => {
     if (!selectedUser) return null;
+
     const isStaff =
-      !!selectedUser.role && STAFF_ROLES.includes(selectedUser.role);
+      !!selectedUser.role &&
+      STAFF_ROLES.includes(selectedUser.role as (typeof STAFF_ROLES)[number]);
 
     return (
       <AnimatePresence>
-        {/* Desktop */}
+        {/* Desktop card */}
         <motion.div
           key="profile-desktop"
           variants={cardVariants}
@@ -179,7 +197,7 @@ export function ChatRoomShell({
           </div>
         </motion.div>
 
-        {/* Mobile */}
+        {/* Mobile card */}
         <motion.div
           key="profile-mobile"
           variants={cardVariants}
@@ -221,6 +239,7 @@ export function ChatRoomShell({
                 </span>
               )}
             </div>
+
             <div className="flex flex-col flex-1">
               <span className="text-sm font-semibold text-slate-100">
                 {selectedUser.username ?? "Utilisateur"}
@@ -250,7 +269,7 @@ export function ChatRoomShell({
       >
         {renderFloatingCard()}
 
-        {/* HEADER (NO overflow-hidden, high z-index) */}
+        {/* HEADER */}
         <motion.header
           variants={headerVariants}
           initial="hidden"
@@ -360,3 +379,5 @@ export function ChatRoomShell({
     </div>
   );
 }
+
+export default ChatRoomShell;
