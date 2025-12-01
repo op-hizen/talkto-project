@@ -19,6 +19,7 @@ import type { Message, ToastState } from "../chatTypes";
 
 const GROUP_WINDOW_MS = 4 * 60 * 1000;
 const NEAR_BOTTOM_PX = 220;
+const TAIL_SIZE = 50;
 
 /* ---------------- MOTION VARIANTS ---------------- */
 
@@ -151,6 +152,108 @@ type Props = {
   setToast: React.Dispatch<React.SetStateAction<ToastState>>;
 };
 
+/* ---------------- GROUPING CHUNK BUILDER ---------------- */
+
+type GroupMeta = {
+  lastDayKey: string | null;
+  prevMsg: Message | null;
+  prevGroupMeta:
+    | { startIdx: number; groupIndex: number; groupSize: number }
+    | null;
+};
+
+function initMeta(): GroupMeta {
+  return { lastDayKey: null, prevMsg: null, prevGroupMeta: null };
+}
+
+function buildChunk(
+  msgs: Message[],
+  unreadMarkerId: string | null,
+  startMeta: GroupMeta
+) {
+  const out: VItem[] = [];
+  let { lastDayKey, prevMsg, prevGroupMeta } = startMeta;
+
+  msgs.forEach((m) => {
+    if (unreadMarkerId && m.id === unreadMarkerId) {
+      out.push({ type: "unread", key: `unread-${m.id}` });
+      prevMsg = null;
+      prevGroupMeta = null;
+    }
+
+    const d = new Date(m.createdAt);
+    const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+
+    if (dayKey !== lastDayKey) {
+      out.push({
+        type: "day",
+        key: `day-${dayKey}`,
+        label: dayLabel(m.createdAt),
+      });
+      lastDayKey = dayKey;
+      prevMsg = null;
+      prevGroupMeta = null;
+    }
+
+    const groupedWithPrev =
+      !!prevMsg &&
+      prevMsg.author.id === m.author.id &&
+      !prevMsg.deletedAt &&
+      !m.deletedAt &&
+      d.getTime() - new Date(prevMsg.createdAt).getTime() < GROUP_WINDOW_MS;
+
+    let groupIndex = 0;
+    let groupSize = 1;
+
+    if (groupedWithPrev && prevGroupMeta) {
+      groupIndex = prevGroupMeta.groupIndex + 1;
+      groupSize = prevGroupMeta.groupSize + 1;
+    }
+
+    const item: MsgItem = {
+      type: "msg",
+      key: m.id,
+      msg: m,
+      index: 0, // patch plus bas
+      groupedWithPrev,
+      groupIndex,
+      groupSize,
+    };
+
+    out.push(item);
+
+    if (!groupedWithPrev) {
+      prevGroupMeta = {
+        startIdx: out.length - 1,
+        groupIndex: 0,
+        groupSize: 1,
+      };
+    } else if (prevGroupMeta) {
+      prevGroupMeta.groupSize = groupSize;
+      prevGroupMeta.groupIndex = groupIndex;
+
+      for (let k = prevGroupMeta.startIdx; k < out.length; k++) {
+        const it2 = out[k];
+        if (it2.type === "msg") it2.groupSize = groupSize;
+      }
+    }
+
+    prevMsg = m;
+  });
+
+  return {
+    out,
+    meta: { lastDayKey, prevMsg, prevGroupMeta },
+  };
+}
+
+function patchMsgIndexes(items: VItem[]) {
+  let msgIndex = 0;
+  for (const it of items) {
+    if (it.type === "msg") it.index = msgIndex++;
+  }
+}
+
 /* ---------------- MAIN ---------------- */
 
 export default function MessageList({
@@ -184,18 +287,81 @@ export default function MessageList({
   );
   const [popover, setPopover] = useState<PopoverState>(null);
 
-  // mentions cache incrémental
+  /* ---------- DELTA-ONLY MENTION CACHES ---------- */
+
   const mentionPartsRef = useRef(
     new Map<string, ReturnType<typeof parseMentions>>()
   );
+  const mentionUserByNameRef = useRef(new Map<string, string>()); // usernameLower -> userId
+  const prevLenRef = useRef(0);
 
   useEffect(() => {
-    for (const m of messages) {
-      if (!m.deletedAt && !mentionPartsRef.current.has(m.id)) {
+    const prevLen = prevLenRef.current;
+    const nextLen = messages.length;
+
+    for (let i = prevLen; i < nextLen; i++) {
+      const m = messages[i];
+      if (!m) continue;
+
+      if (!m.deletedAt) {
         mentionPartsRef.current.set(m.id, parseMentions(m.content));
       }
+
+      if (m.author.username) {
+        mentionUserByNameRef.current.set(
+          m.author.username.toLowerCase(),
+          m.author.id
+        );
+      }
+      if (m.replyTo?.author?.username) {
+        mentionUserByNameRef.current.set(
+          m.replyTo.author.username.toLowerCase(),
+          m.replyTo.author.id
+        );
+      }
     }
+
+    prevLenRef.current = nextLen;
   }, [messages]);
+
+  const renderContentWithMentions = useCallback(
+    (msgId: string, text: string) => {
+      const parts = mentionPartsRef.current.get(msgId) ?? parseMentions(text);
+
+      return parts.map((p, i) => {
+        if (p.type === "text") return <span key={`t-${i}`}>{p.value}</span>;
+
+        const raw = p.value.slice(1);
+        const userId = mentionUserByNameRef.current.get(raw.toLowerCase());
+
+        return (
+          <button
+            key={`m-${i}`}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              userId && onUserClick?.(userId);
+            }}
+            onMouseEnter={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setPopover({
+                username: raw,
+                x: r.left + r.width / 2,
+                y: r.top - 8,
+              });
+            }}
+            onMouseLeave={() => setPopover(null)}
+            className="inline-flex"
+          >
+            <span className="font-semibold text-indigo-200 bg-indigo-500/10 px-1 py-0.5 rounded-md ring-1 ring-indigo-400/20 hover:bg-indigo-500/15 transition">
+              @{raw}
+            </span>
+          </button>
+        );
+      });
+    },
+    [onUserClick]
+  );
 
   /* ---------- CLOSE SELECTION ON OUTSIDE / ESC ---------- */
 
@@ -229,115 +395,50 @@ export default function MessageList({
     return firstUnread?.id ?? null;
   }, [messages, lastReadAt]);
 
-  /* ---------- BUILD ITEMS (TAIL-OPT) ---------- */
+  /* ---------- HEAD-FREEZE ITEMS ---------- */
+
+  const frozenItemsRef = useRef<VItem[]>([]);
+  const frozenMetaRef = useRef<GroupMeta | null>(null);
+  const frozenCountRef = useRef<number>(0);
+  const unfrozenUnreadMarkerRef = useRef<string | null>(unreadMarkerId);
+
+  // si unread marker change, on invalide le cache pour rester correct
+  useEffect(() => {
+    if (unreadMarkerId !== unfrozenUnreadMarkerRef.current) {
+      frozenItemsRef.current = [];
+      frozenMetaRef.current = null;
+      frozenCountRef.current = 0;
+      unfrozenUnreadMarkerRef.current = unreadMarkerId;
+    }
+  }, [unreadMarkerId]);
 
   const items: VItem[] = useMemo(() => {
-    const TAIL = 50;
-    const head = messages.slice(0, Math.max(0, messages.length - TAIL));
-    const tail = messages.slice(-TAIL);
+    // 1) on fige l’ancien tail si on a trop grandi
+    if (messages.length - frozenCountRef.current > TAIL_SIZE) {
+      const freezeUpTo = messages.length - TAIL_SIZE;
+      const toFreeze = messages.slice(frozenCountRef.current, freezeUpTo);
 
-    function buildChunk(
-      msgs: Message[],
-      startMeta: {
-        lastDayKey: string | null;
-        prevMsg: Message | null;
-        prevGroupMeta:
-          | { startIdx: number; groupIndex: number; groupSize: number }
-          | null;
-      }
-    ) {
-      const out: VItem[] = [];
-      let { lastDayKey, prevMsg, prevGroupMeta } = startMeta;
+      const built = buildChunk(
+        toFreeze,
+        unreadMarkerId,
+        frozenMetaRef.current ?? initMeta()
+      );
 
-      msgs.forEach((m) => {
-        if (unreadMarkerId && m.id === unreadMarkerId) {
-          out.push({ type: "unread", key: `unread-${m.id}` });
-          prevMsg = null;
-          prevGroupMeta = null;
-        }
-
-        const d = new Date(m.createdAt);
-        const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-
-        if (dayKey !== lastDayKey) {
-          out.push({
-            type: "day",
-            key: `day-${dayKey}`,
-            label: dayLabel(m.createdAt),
-          });
-          lastDayKey = dayKey;
-          prevMsg = null;
-          prevGroupMeta = null;
-        }
-
-        const groupedWithPrev =
-          !!prevMsg &&
-          prevMsg.author.id === m.author.id &&
-          !prevMsg.deletedAt &&
-          !m.deletedAt &&
-          d.getTime() - new Date(prevMsg.createdAt).getTime() < GROUP_WINDOW_MS;
-
-        let groupIndex = 0;
-        let groupSize = 1;
-
-        if (groupedWithPrev && prevGroupMeta) {
-          groupIndex = prevGroupMeta.groupIndex + 1;
-          groupSize = prevGroupMeta.groupSize + 1;
-        }
-
-        const item: MsgItem = {
-          type: "msg",
-          key: m.id,
-          msg: m,
-          index: 0, // patch plus bas
-          groupedWithPrev,
-          groupIndex,
-          groupSize,
-        };
-
-        out.push(item);
-
-        if (!groupedWithPrev) {
-          prevGroupMeta = {
-            startIdx: out.length - 1,
-            groupIndex: 0,
-            groupSize: 1,
-          };
-        } else if (prevGroupMeta) {
-          prevGroupMeta.groupSize = groupSize;
-          prevGroupMeta.groupIndex = groupIndex;
-
-          for (let k = prevGroupMeta.startIdx; k < out.length; k++) {
-            const it2 = out[k];
-            if (it2.type === "msg") it2.groupSize = groupSize;
-          }
-        }
-
-        prevMsg = m;
-      });
-
-      return {
-        out,
-        meta: { lastDayKey, prevMsg, prevGroupMeta },
-      };
+      frozenItemsRef.current = [...frozenItemsRef.current, ...built.out];
+      frozenMetaRef.current = built.meta;
+      frozenCountRef.current = freezeUpTo;
     }
 
-    const headBuilt = buildChunk(head, {
-      lastDayKey: null,
-      prevMsg: null,
-      prevGroupMeta: null,
-    });
+    // 2) on rebuild seulement le tail
+    const tail = messages.slice(frozenCountRef.current);
+    const tailBuilt = buildChunk(
+      tail,
+      unreadMarkerId,
+      frozenMetaRef.current ?? initMeta()
+    );
 
-    const tailBuilt = buildChunk(tail, headBuilt.meta);
-
-    const merged = [...headBuilt.out, ...tailBuilt.out];
-
-    // patch indexes (index dans messages[])
-    let msgIndex = 0;
-    for (const it of merged) {
-      if (it.type === "msg") it.index = msgIndex++;
-    }
-
+    const merged = [...frozenItemsRef.current, ...tailBuilt.out];
+    patchMsgIndexes(merged);
     return merged;
   }, [messages, unreadMarkerId]);
 
@@ -419,61 +520,6 @@ export default function MessageList({
     }
     if (popover) setPopover(null);
   }, [popover, onAtBottomRead, onNearBottomChange, setNewBelowCount]);
-
-  /* ---------- RENDER CONTENT WITH MENTIONS ---------- */
-
-  const mentionUserByName = useMemo(() => {
-    const m = new Map<string, string>(); // usernameLower -> userId
-    for (const msg of messages) {
-      if (msg.author.username) {
-        m.set(msg.author.username.toLowerCase(), msg.author.id);
-      }
-      if (msg.replyTo?.author?.username) {
-        m.set(msg.replyTo.author.username.toLowerCase(), msg.replyTo.author.id);
-      }
-    }
-    return m;
-  }, [messages]);
-
-  const renderContentWithMentions = useCallback(
-    (msgId: string, text: string) => {
-      const parts =
-        mentionPartsRef.current.get(msgId) ?? parseMentions(text);
-
-      return parts.map((p, i) => {
-        if (p.type === "text") return <span key={`t-${i}`}>{p.value}</span>;
-
-        const raw = p.value.slice(1);
-        const userId = mentionUserByName.get(raw.toLowerCase());
-
-        return (
-          <button
-            key={`m-${i}`}
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              userId && onUserClick?.(userId);
-            }}
-            onMouseEnter={(e) => {
-              const r = e.currentTarget.getBoundingClientRect();
-              setPopover({
-                username: raw,
-                x: r.left + r.width / 2,
-                y: r.top - 8,
-              });
-            }}
-            onMouseLeave={() => setPopover(null)}
-            className="inline-flex"
-          >
-            <span className="font-semibold text-indigo-200 bg-indigo-500/10 px-1 py-0.5 rounded-md ring-1 ring-indigo-400/20 hover:bg-indigo-500/15 transition">
-              @{raw}
-            </span>
-          </button>
-        );
-      });
-    },
-    [mentionUserByName, onUserClick]
-  );
 
   /* ---------- ITEM RENDERER ---------- */
 

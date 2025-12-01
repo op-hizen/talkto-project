@@ -3,6 +3,7 @@
 
 import React, {
   forwardRef,
+  startTransition,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -114,8 +115,9 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
     firstItemIndexRef.current
   );
 
-  // Mention users cache incrémental
+  // Mention users cache incrémental (pas de scan complet)
   const mentionUsersRef = useRef<Map<string, MentionUser>>(new Map());
+  const prevMsgLenRef = useRef<number>(initialMessages.length);
 
   /* ---------- IMPERATIVE API ---------- */
 
@@ -139,14 +141,16 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
       hasMessage: (id: string) => indexByMessageIdRef.current[id] != null,
 
       mergeMessages: (msgs: Message[]) => {
-        setMessages((prev) => {
-          const map = new Map(prev.map((m) => [m.id, m]));
-          for (const m of msgs) map.set(m.id, m);
-          return Array.from(map.values()).sort(
-            (a, b) =>
-              new Date(a.createdAt).getTime() -
-              new Date(b.createdAt).getTime()
-          );
+        startTransition(() => {
+          setMessages((prev) => {
+            const map = new Map(prev.map((m) => [m.id, m]));
+            for (const m of msgs) map.set(m.id, m);
+            return Array.from(map.values()).sort(
+              (a, b) =>
+                new Date(a.createdAt).getTime() -
+                new Date(b.createdAt).getTime()
+            );
+          });
         });
       },
 
@@ -185,7 +189,10 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
         return;
       }
 
-      setMessages((prev) => [...older, ...prev]);
+      // prepend older
+      startTransition(() => {
+        setMessages((prev) => [...older, ...prev]);
+      });
 
       firstItemIndexRef.current -= older.length;
       setFirstItemIndex(firstItemIndexRef.current);
@@ -220,10 +227,16 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
     };
   }, [markAllReadIfAtBottom]);
 
-  /* ---------- MENTION USERS INCREMENTAL ---------- */
+  /* ---------- MENTION USERS INCREMENTAL (DELTA ONLY) ---------- */
 
   useEffect(() => {
-    for (const m of messages) {
+    const prevLen = prevMsgLenRef.current;
+    const nextLen = messages.length;
+
+    for (let i = prevLen; i < nextLen; i++) {
+      const m = messages[i];
+      if (!m) continue;
+
       if (m.author.username) {
         mentionUsersRef.current.set(m.author.id, {
           id: m.author.id,
@@ -244,6 +257,8 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
         username: currentUsername,
       });
     }
+
+    prevMsgLenRef.current = nextLen;
   }, [messages, currentUserId, currentUsername]);
 
   const getMentionUsers = useCallback(() => {
@@ -289,21 +304,23 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
     const channel = pusherClient.subscribe(channelName);
 
     const onNewMessage = (data: Message) => {
-      setMessages((prev) => {
-        if (data.author.id === currentUserId) {
-          const idx = prev.findIndex(
-            (m) =>
-              m.id.startsWith("optimistic-") &&
-              m.author.id === data.author.id &&
-              m.content === data.content
-          );
-          if (idx !== -1) {
-            const copy = prev.slice();
-            copy[idx] = data;
-            return copy;
+      startTransition(() => {
+        setMessages((prev) => {
+          if (data.author.id === currentUserId) {
+            const idx = prev.findIndex(
+              (m) =>
+                m.id.startsWith("optimistic-") &&
+                m.author.id === data.author.id &&
+                m.content === data.content
+            );
+            if (idx !== -1) {
+              const copy = prev.slice();
+              copy[idx] = data;
+              return copy;
+            }
           }
-        }
-        return [...prev, data];
+          return [...prev, data];
+        });
       });
 
       if (!isNearBottomRef.current) {
@@ -344,24 +361,28 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
     };
 
     const onEditMessage = (data: Message) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === data.id ? { ...m, ...data } : m))
-      );
+      startTransition(() => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === data.id ? { ...m, ...data } : m))
+        );
+      });
     };
 
     const onDeleteMessage = (data: { id: string; deletedAt: string | null }) => {
-      setMessages((prev) =>
-        prev.map((m) => {
-          if (m.id === data.id) return { ...m, deletedAt: data.deletedAt };
-          if (m.replyTo && m.replyTo.id === data.id) {
-            return {
-              ...m,
-              replyTo: { ...m.replyTo, content: "Message supprimé" },
-            };
-          }
-          return m;
-        })
-      );
+      startTransition(() => {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id === data.id) return { ...m, deletedAt: data.deletedAt };
+            if (m.replyTo && m.replyTo.id === data.id) {
+              return {
+                ...m,
+                replyTo: { ...m.replyTo, content: "Message supprimé" },
+              };
+            }
+            return m;
+          })
+        );
+      });
     };
 
     const onTyping = (data: { userId: string; username: string | null }) => {
@@ -392,7 +413,11 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
   /* ---------- SEND / EDIT / DELETE ---------- */
 
   const sendOrEdit = useCallback(
-    async (text: string, editingMessageId: string | null, replyTo?: Message | null) => {
+    async (
+      text: string,
+      editingMessageId: string | null,
+      replyTo?: Message | null
+    ) => {
       const trimmed = text.trim();
       if (!trimmed) return;
 
@@ -427,11 +452,15 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
             : null,
         };
 
-        setMessages((prev) => [...prev, optimistic]);
+        startTransition(() => {
+          setMessages((prev) => [...prev, optimistic]);
+        });
 
         if (wasAtBottom) {
           requestAnimationFrame(() => {
-            window.dispatchEvent(new CustomEvent("chat:scrollToBottomImmediate"));
+            window.dispatchEvent(
+              new CustomEvent("chat:scrollToBottomImmediate")
+            );
           });
         }
       }
@@ -446,19 +475,29 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
         }
       } catch (err: any) {
         console.error(err);
-        setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+        startTransition(() => {
+          setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+        });
         throw err;
       }
     },
     [
       currentUserId,
       currentUsername,
-      markAllReadIfAtBottom,
       roomId,
+      markAllReadIfAtBottom,
     ]
   );
 
   const onDelete = useCallback((id: string) => {
+    // delete optimiste visuel (optionnel mais souvent mieux)
+    startTransition(() => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === id ? { ...m, deletedAt: new Date().toISOString() } : m
+        )
+      );
+    });
     void deleteMessageAction(id);
   }, []);
 
