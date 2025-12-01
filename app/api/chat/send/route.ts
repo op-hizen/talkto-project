@@ -12,7 +12,9 @@ import { cookies } from "next/headers";
 
 export async function POST(req: Request) {
   try {
-    const cookieStore = cookies();
+    // ✅ cookies() est async dans ta version Next
+    const cookieStore = await cookies();
+
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -53,12 +55,26 @@ export async function POST(req: Request) {
 
     const trimmed = content.trim();
 
-    const message = await prisma.message.create({
+    // ✅ mapping Supabase UUID -> User interne (cuid)
+    const dbUser = await prisma.user.findUnique({
+      where: { supabaseId: user.id },
+      select: { id: true },
+    });
+
+    if (!dbUser) {
+      return NextResponse.json(
+        { error: "User not found (missing supabaseId mapping)" },
+        { status: 404 }
+      );
+    }
+
+    // ✅ ton schema a parentId (threads). On mappe replyToId -> parentId
+    const message = await prisma.chatMessage.create({
       data: {
         roomId,
         content: trimmed,
-        replyToId: replyToId ?? null,
-        authorId: user.id,
+        parentId: replyToId ?? null,
+        authorId: dbUser.id,
       },
       select: {
         id: true,
@@ -74,7 +90,7 @@ export async function POST(req: Request) {
             role: true,
           },
         },
-        replyTo: {
+        parent: {
           select: {
             id: true,
             content: true,
@@ -86,6 +102,7 @@ export async function POST(req: Request) {
 
     const res = NextResponse.json({ ok: true, message });
 
+    // ✅ Pusher non bloquant
     void pusherServer.trigger(
       `private-chat-${roomId}`,
       "new-message",
