@@ -12,11 +12,7 @@ import React, {
 } from "react";
 
 import { pusherClient } from "@/lib/pusher/client";
-import {
-  sendMessageAction,
-  editMessageAction,
-  deleteMessageAction,
-} from "./actions";
+import { editMessageAction, deleteMessageAction } from "./actions";
 import { emitTypingPresence } from "./_hooks/useTypingPresence";
 
 import MessageList from "./_components/MessageList";
@@ -57,6 +53,25 @@ async function persistLastRead(roomId: string, lastReadAt: string) {
   });
 }
 
+async function sendMessageApi(
+  roomId: string,
+  content: string,
+  replyToId?: string
+) {
+  const res = await fetch("/api/chat/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ roomId, content, replyToId }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    throw new Error(err?.error ?? "Impossible d’envoyer le message.");
+  }
+
+  return (await res.json()) as { ok: true; message: Message };
+}
+
 /* ---------------- CONSTS ---------------- */
 
 const COOLDOWN_MS_SAFE_DEBATE = 15_000;
@@ -79,6 +94,8 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
   },
   ref
 ) {
+  /* ---------- STATE ---------- */
+
   const [messages, setMessages] = useState<Message[]>(initialMessages);
 
   const [cursor, setCursor] = useState<string | null>(initialCursor);
@@ -99,6 +116,8 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
 
   const isSafeDebate = roomSlug === "safe-debate";
   const effectiveUsername = currentUsername ?? "";
+
+  /* ---------- REFS ---------- */
 
   const isNearBottomRef = useRef(true);
   const lastTypingSentRef = useRef<number>(0);
@@ -212,7 +231,7 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
   );
 
   const markAllReadIfAtBottom = useCallback(() => {
-    if (sendingRef.current) return; // ✅ évite thrash pendant un send
+    if (sendingRef.current) return;
     if (!messages.length) return;
     flushLastRead(messages[messages.length - 1].createdAt);
   }, [messages, flushLastRead]);
@@ -458,8 +477,11 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
 
       sendingRef.current = true;
       try {
-        if (editingId) await editMessageAction(editingId, trimmed);
-        else await sendMessageAction(roomId, trimmed, replyToId);
+        if (editingId) {
+          await editMessageAction(editingId, trimmed);
+        } else {
+          await sendMessageApi(roomId, trimmed, replyToId);
+        }
 
         if (wasAtBottom) {
           window.dispatchEvent(new CustomEvent("chat:scrollToBottom"));

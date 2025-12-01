@@ -9,31 +9,22 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { AnimatePresence, motion } from "framer-motion";
-
-import type { MentionUser, Message } from "../chatTypes";
+import type { Message, MentionUser } from "../chatTypes";
 
 /* ---------------- CONSTS ---------------- */
 
 const EMOJI_REGEX = /\p{Extended_Pictographic}/u;
-const MAX_MENTION_SUGGESTIONS = 10;
+const MENTION_REGEX = /@[\w.-]+/g;
+
 const MAX_LEN = 2000;
-
-const replyBarVariants = {
-  hidden: { opacity: 0, y: 6 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.2 } },
-  exit: { opacity: 0, y: 6, transition: { duration: 0.15 } },
-};
-
-const mentionBoxVariants = {
-  hidden: { opacity: 0, y: 6, scale: 0.985 },
-  show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.18 } },
-  exit: { opacity: 0, y: 6, scale: 0.985, transition: { duration: 0.12 } },
-};
+const MAX_MENTION_SUGGESTIONS = 10;
+const TYPING_THROTTLE_MS = 1500; // au cas où notifyTyping ne throttle pas assez
 
 function containsEmoji(str: string) {
   return EMOJI_REGEX.test(str);
 }
+
+/* ---------------- TYPES ---------------- */
 
 type Props = {
   roomId: string;
@@ -41,6 +32,7 @@ type Props = {
   currentUsername: string;
   effectiveUsername: string;
 
+  // renvoie la liste des users mentionnables (cache côté client)
   getMentionUsers: () => MentionUser[];
 
   isSafeDebate: boolean;
@@ -55,11 +47,12 @@ type Props = {
     replyTo?: Message | null
   ) => Promise<void>;
 
-  // actions venant de la liste
   editingTarget: Message | null;
   replyTarget: Message | null;
   onClearTargets: () => void;
 };
+
+/* ---------------- MAIN ---------------- */
 
 export default function Composer({
   roomId,
@@ -76,21 +69,19 @@ export default function Composer({
   replyTarget,
   onClearTargets,
 }: Props) {
-  const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const lastTypingSentRef = useRef<number>(0);
 
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const [mentionIndex, setMentionIndex] = useState(0);
-
+  const [input, setInput] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
   const [cooldownRemaining, setCooldownRemaining] = useState<number | null>(null);
 
-  const editingMessageId = editingTarget?.id ?? null;
-  const replyToTarget = replyTarget;
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
 
-  /* ---------- SYNC INPUT WHEN EDITING ---------- */
+  /* ---------- auto-fill edit ---------- */
 
   useEffect(() => {
     if (editingTarget) {
@@ -99,7 +90,7 @@ export default function Composer({
     }
   }, [editingTarget]);
 
-  /* ---------- AUTO-RESIZE TEXTAREA ---------- */
+  /* ---------- textarea auto-resize ---------- */
 
   useLayoutEffect(() => {
     const ta = textareaRef.current;
@@ -108,7 +99,7 @@ export default function Composer({
     ta.style.height = Math.min(ta.scrollHeight, 112) + "px";
   }, [input]);
 
-  /* ---------- COOLDOWN LIVE ---------- */
+  /* ---------- cooldown live ---------- */
 
   useEffect(() => {
     if (!cooldownUntil) {
@@ -131,9 +122,10 @@ export default function Composer({
     return () => window.clearInterval(id);
   }, [cooldownUntil]);
 
-  /* ---------- MENTIONS ---------- */
+  /* ---------- mention users ---------- */
 
-  const mentionUsers = useMemo(() => getMentionUsers(), [getMentionUsers, roomId]);
+  const mentionUsers = useMemo(() => getMentionUsers(), [getMentionUsers]);
+
   const filteredMentionUsers = useMemo(() => {
     if (mentionQuery === null) return [];
     const q = mentionQuery.toLowerCase().trim();
@@ -147,9 +139,12 @@ export default function Composer({
     if (mentionIndex >= filteredMentionUsers.length) setMentionIndex(0);
   }, [filteredMentionUsers.length, mentionIndex]);
 
+  /* ---------- insert mention ---------- */
+
   const insertMention = useCallback(
     (username: string) => {
       if (!username) return;
+
       const textarea = textareaRef.current;
       const value = input;
       const cursorPos =
@@ -182,7 +177,7 @@ export default function Composer({
     [input]
   );
 
-  /* ---------- INPUT CHANGE ---------- */
+  /* ---------- handle change ---------- */
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -190,8 +185,16 @@ export default function Composer({
       setInput(value);
       setErrorMessage(null);
 
-      if (value.trim().length > 0) notifyTyping();
-      else stopTyping();
+      // typing throttle léger (en plus du throttle côté client si besoin)
+      if (value.trim().length > 0) {
+        const now = Date.now();
+        if (now - lastTypingSentRef.current > TYPING_THROTTLE_MS) {
+          lastTypingSentRef.current = now;
+          notifyTyping();
+        }
+      } else {
+        stopTyping();
+      }
 
       const cursorPos = e.target.selectionStart ?? value.length;
       const before = value.slice(0, cursorPos);
@@ -208,12 +211,13 @@ export default function Composer({
     [notifyTyping, stopTyping]
   );
 
-  /* ---------- SEND / EDIT ---------- */
+  /* ---------- send/fire-and-forget ---------- */
 
-  const send = useCallback(async () => {
+  const fireSend = useCallback(() => {
     const trimmed = input.trim();
     if (!trimmed) return;
 
+    // safe debate rules
     if (isSafeDebate) {
       if (containsEmoji(trimmed)) {
         setErrorMessage("Les emojis sont interdits dans ce salon.");
@@ -229,48 +233,52 @@ export default function Composer({
       }
     }
 
+    const textToSend = trimmed;
+    const editingId = editingTarget?.id ?? null;
+    const replyTo = replyTarget ?? null;
+
+    // ✅ IMPORTANT: UI instant, on clear AVANT l'await
     setInput("");
     setMentionQuery(null);
     setMentionIndex(0);
+    setErrorMessage(null);
+    onClearTargets();
     stopTyping();
 
-    try {
-      await onSendOrEdit(trimmed, editingMessageId, replyToTarget);
-
-      if (isSafeDebate) {
-        setCooldownUntil(Date.now() + cooldownMs);
-      }
-
-      onClearTargets();
-    } catch (err: any) {
+    // fire-and-forget (pas de blocage UI)
+    void onSendOrEdit(textToSend, editingId, replyTo).catch((err: any) => {
       console.error(err);
       setErrorMessage(
         err instanceof Error && err.message
           ? err.message
           : "Impossible d’envoyer le message."
       );
+    });
+
+    if (isSafeDebate) {
+      setCooldownUntil(Date.now() + cooldownMs);
     }
   }, [
     input,
     isSafeDebate,
-    cooldownUntil,
-    editingMessageId,
-    replyToTarget,
-    stopTyping,
-    onSendOrEdit,
     cooldownMs,
+    cooldownUntil,
+    editingTarget,
+    replyTarget,
+    onSendOrEdit,
     onClearTargets,
+    stopTyping,
   ]);
 
   const onSubmit = useCallback(
-    async (e: React.FormEvent) => {
+    (e: React.FormEvent) => {
       e.preventDefault();
-      await send();
+      fireSend();
     },
-    [send]
+    [fireSend]
   );
 
-  /* ---------- TEXTAREA KEYDOWN ---------- */
+  /* ---------- keydown ---------- */
 
   const handleTextareaKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -309,10 +317,17 @@ export default function Composer({
 
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        void send();
+        fireSend();
       }
     },
-    [mentionQuery, filteredMentionUsers, mentionIndex, insertMention, send, onClearTargets]
+    [
+      mentionQuery,
+      filteredMentionUsers,
+      mentionIndex,
+      insertMention,
+      fireSend,
+      onClearTargets,
+    ]
   );
 
   const canSend =
@@ -322,68 +337,50 @@ export default function Composer({
   return (
     <div className="border-t border-white/10 px-4 py-2 space-y-1 bg-black/70 backdrop-blur-xl">
       {/* Reply bar */}
-      <AnimatePresence>
-        {replyToTarget && (
-          <motion.div
-            variants={replyBarVariants}
-            initial="hidden"
-            animate="show"
-            exit="exit"
-            className="flex items-center justify-between text-[11px] text-slate-300 bg-white/[0.03] border border-white/10 rounded-xl px-3 py-2"
+      {replyTarget && (
+        <div className="flex items-center justify-between text-[11px] text-slate-300 bg-white/[0.03] border border-white/10 rounded-xl px-3 py-2">
+          <div className="truncate">
+            <span className="opacity-70">Répondre à </span>
+            <span className="font-semibold">
+              {replyTarget.author.username ?? "Utilisateur"}
+            </span>
+            <span className="opacity-60"> — </span>
+            <span className="text-slate-200">
+              {replyTarget.content.length > 80
+                ? replyTarget.content.slice(0, 77) + "…"
+                : replyTarget.content}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onClearTargets}
+            className="ml-3 text-[10px] text-slate-500 hover:text-slate-200 transition"
           >
-            <div className="truncate">
-              <span className="opacity-70">Répondre à </span>
-              <span className="font-semibold">
-                {replyToTarget.author.username ?? "Utilisateur"}
-              </span>
-              <span className="opacity-60"> — </span>
-              <span className="text-slate-200">
-                {replyToTarget.content.length > 80
-                  ? replyToTarget.content.slice(0, 77) + "…"
-                  : replyToTarget.content}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={onClearTargets}
-              className="ml-3 text-[10px] text-slate-500 hover:text-slate-200 transition"
-            >
-              Annuler
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            Annuler
+          </button>
+        </div>
+      )}
 
       {/* Mentions box */}
-      <AnimatePresence>
-        {mentionQuery !== null && filteredMentionUsers.length > 0 && (
-          <motion.div
-            variants={mentionBoxVariants}
-            initial="hidden"
-            animate="show"
-            exit="exit"
-            className="bg-black/80 border border-white/10 rounded-xl mb-1 max-h-40 overflow-y-auto text-xs shadow-lg backdrop-blur-xl scrollbar-talkto"
-          >
-            {filteredMentionUsers.map((u, idx) => (
-              <button
-                key={u.id}
-                type="button"
-                onClick={() => insertMention(u.username)}
-                className={`w-full flex items-center justify-between px-3 py-2 text-left transition ${
-                  idx === mentionIndex
-                    ? "bg-white/[0.06]"
-                    : "hover:bg-white/[0.04]"
-                }`}
-              >
-                <span className="text-slate-100">@{u.username}</span>
-                {u.id === currentUserId && (
-                  <span className="text-[10px] text-slate-500">toi</span>
-                )}
-              </button>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {mentionQuery !== null && filteredMentionUsers.length > 0 && (
+        <div className="bg-black/80 border border-white/10 rounded-xl mb-1 max-h-40 overflow-y-auto text-xs shadow-lg backdrop-blur-xl scrollbar-talkto">
+          {filteredMentionUsers.map((u, idx) => (
+            <button
+              key={u.id}
+              type="button"
+              onClick={() => insertMention(u.username)}
+              className={`w-full flex items-center justify-between px-3 py-2 text-left transition ${
+                idx === mentionIndex ? "bg-white/[0.06]" : "hover:bg-white/[0.04]"
+              }`}
+            >
+              <span className="text-slate-100">@{u.username}</span>
+              {u.id === currentUserId && (
+                <span className="text-[10px] text-slate-500">toi</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
       {errorMessage && (
         <div className="text-[11px] text-red-300 mb-1">{errorMessage}</div>
@@ -405,9 +402,7 @@ export default function Composer({
             onChange={handleChange}
             onKeyDown={handleTextareaKeyDown}
             placeholder={
-              editingMessageId
-                ? "Modifier ton message..."
-                : "Écris un message..."
+              editingTarget ? "Modifier ton message..." : "Écris un message..."
             }
             className="w-full bg-transparent resize-none outline-none text-sm max-h-28 text-slate-100 placeholder:text-slate-500"
           />
@@ -415,7 +410,7 @@ export default function Composer({
             <span>
               {input.length}/{MAX_LEN}
             </span>
-            {editingMessageId && (
+            {editingTarget && (
               <span className="text-indigo-300">Mode édition</span>
             )}
           </div>
@@ -426,7 +421,7 @@ export default function Composer({
           disabled={!canSend}
           className="px-4 py-2 rounded-2xl text-xs font-semibold bg-indigo-500/90 hover:bg-indigo-400 text-white disabled:opacity-40 disabled:hover:bg-indigo-500/90 transition"
         >
-          {editingMessageId ? "Enregistrer" : "Envoyer"}
+          {editingTarget ? "Enregistrer" : "Envoyer"}
         </button>
       </form>
     </div>

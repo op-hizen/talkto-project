@@ -3,9 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")  // URL pooler Supabase
+  directUrl = env("DIRECT_URL")    // URL directe
 }
 
 //
@@ -47,10 +47,15 @@ enum ChatMessageHistoryType {
 
 //
 // USER & AUTH
+// On revient à un PK interne en cuid().
+// On stocke l'UUID Supabase dans supabaseId.
+// => pas de migration destructrice, compat Supabase auth OK.
 //
 
 model User {
   id                   String       @id @default(cuid())
+  supabaseId           String?      @unique @db.Uuid // uuid Supabase (nullable si users legacy)
+
   name                 String?
   email                String?      @unique
   emailVerified        DateTime?
@@ -81,6 +86,7 @@ model User {
 
   @@index([role])
   @@index([accessStatus])
+  @@index([supabaseId])
 }
 
 model Account {
@@ -233,25 +239,28 @@ model ChatMessage {
   // Full-text search (Postgres)
   searchVector Unsupported("tsvector")?
 
-  @@index([roomId])
+  // PERF: index composite pour history/jump
+  @@index([roomId, createdAt(sort: Desc)])
   @@index([authorId])
-  @@index([createdAt])
   @@index([deletedAt])
   @@index([parentId])
+
+  // optionnel full-text
+  // @@index([searchVector], type: Gin)
 }
 
 model ChatParticipant {
-  id        String @id @default(cuid())
+  id         String @id @default(cuid())
 
-  roomId    String
-  room      ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomId     String
+  room       ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  role      ChatParticipantRole @default(USER)
+  role       ChatParticipantRole @default(USER)
 
-  joinedAt  DateTime  @default(now())
+  joinedAt   DateTime  @default(now())
   lastReadAt DateTime?
 
   @@unique([roomId, userId])
@@ -271,7 +280,7 @@ model ChatMessageHistory {
   type            ChatMessageHistoryType
 
   editedById      String?
-  editedBy        User? @relation("UserMessageHistories", fields: [editedById], references: [id], onDelete: SetNull)
+  editedBy        User?   @relation("UserMessageHistories", fields: [editedById], references: [id], onDelete: SetNull)
 
   @@index([messageId])
   @@index([editedById])
