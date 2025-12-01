@@ -1,8 +1,9 @@
 // app/chat/[roomId]/_components/ChatRoomShell.tsx
 "use client";
 
-import React, { useMemo, useRef, useState } from "react";
-import ChatRoomClient, { Message, ChatRoomHandle } from "../ChatRoomClient";
+import React, { useCallback, useMemo, useRef, useState } from "react";
+import ChatRoomClient from "../ChatRoomClient";
+import type { Message, ChatRoomHandle } from "../chatTypes";
 import { TypingIndicator } from "./TypingIndicator";
 import { useTypingPresence } from "../_hooks/useTypingPresence";
 import Image from "next/image";
@@ -31,7 +32,7 @@ type ChatRoomShellProps = {
 
 const STAFF_ROLES = ["ADMIN", "DEV", "MODERATOR", "SUPPORT"] as const;
 
-/* ---------------- MOTION VARIANTS (FIX TS) ---------------- */
+/* ---------------- MOTION VARIANTS ---------------- */
 
 const shellVariants = {
   hidden: { opacity: 0, y: 14, scale: 0.992 },
@@ -81,6 +82,7 @@ export function ChatRoomShell({
   participants,
 }: ChatRoomShellProps) {
   const { users, isTyping } = useTypingPresence(roomId);
+
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const chatRef = useRef<ChatRoomHandle | null>(null);
 
@@ -111,14 +113,17 @@ export function ChatRoomShell({
     return `${names[0]} et ${names[1]} sont en train d’écrire...`;
   }, [assistantUsers.length, humanUsers]);
 
-  const formatDate = (iso: string) =>
-    new Date(iso).toLocaleDateString("fr-FR", {
-      year: "numeric",
-      month: "short",
-      day: "2-digit",
-    });
+  const formatDate = useCallback(
+    (iso: string) =>
+      new Date(iso).toLocaleDateString("fr-FR", {
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+      }),
+    []
+  );
 
-  const renderFloatingCard = () => {
+  const renderFloatingCard = useCallback(() => {
     if (!selectedUser) return null;
 
     const isStaff =
@@ -252,7 +257,7 @@ export function ChatRoomShell({
         </motion.div>
       </AnimatePresence>
     );
-  };
+  }, [selectedUser, formatDate]);
 
   return (
     <div className="h-[calc(100vh-56px)] min-h-[calc(100vh-56px)] bg-[radial-gradient(circle_at_top,_#0b1220,_#05070d_55%,_#000_100%)] flex items-stretch justify-center px-4 py-6">
@@ -341,38 +346,46 @@ export function ChatRoomShell({
               flex-1 min-h-0 rounded-2xl border border-white/10
               bg-gradient-to-b from-black/40 via-black/70 to-black/50
               overflow-hidden
+              flex flex-col
             "
           >
-            <ChatRoomClient
-              ref={chatRef}
-              roomId={roomId}
-              roomSlug={roomSlug}
-              roomName={roomDisplayName}
-              currentUserId={currentUserId}
-              currentUsername={currentUsername}
-              initialMessages={initialMessages}
-              onUserClick={setSelectedUserId}
-            />
+            {/* Chat client */}
+            <div className="flex-1 min-h-0">
+              <ChatRoomClient
+                ref={chatRef}
+                roomId={roomId}
+                roomSlug={roomSlug}
+                roomName={roomDisplayName}
+                currentUserId={currentUserId}
+                currentUsername={currentUsername}
+                initialMessages={initialMessages}
+                onUserClick={setSelectedUserId}
+              />
+            </div>
+
+            {/* TypingIndicator DANS le shell, hors client */}
+            <div className="flex justify-end items-center px-3 py-1.5 border-t border-white/5 bg-black/30">
+              <AnimatePresence mode="wait">
+                {isTyping && (
+                  <motion.div
+                    key="typing"
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 4 }}
+                    transition={{ duration: 0.18 }}
+                  >
+                    <TypingIndicator visible text={typingText} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </motion.div>
 
+          {/* Hint clavier */}
           <div className="flex justify-between items-center px-1 flex-shrink-0">
             <div className="text-[11px] text-slate-500">
               Entrée pour envoyer · Shift+Entrée pour une nouvelle ligne
             </div>
-
-            <AnimatePresence mode="wait">
-              {isTyping && (
-                <motion.div
-                  key="typing"
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 4 }}
-                  transition={{ duration: 0.18 }}
-                >
-                  <TypingIndicator visible text={typingText} />
-                </motion.div>
-              )}
-            </AnimatePresence>
           </div>
         </main>
       </motion.div>
