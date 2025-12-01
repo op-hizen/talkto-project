@@ -42,9 +42,7 @@ export const {
       if (user) {
         const u = user as AppUserLike;
 
-        // ✅ on force id en string parce qu'avec PrismaAdapter il existe toujours
         if (u.id) t.id = u.id;
-
         if (u.role) t.role = u.role;
         if (u.accessStatus) t.accessStatus = u.accessStatus;
         if (u.username !== undefined) t.username = u.username;
@@ -57,11 +55,13 @@ export const {
       const t = token as AppJWT;
 
       if (session.user) {
-        // ✅ en session le user.id doit être string -> fallback safe
         session.user.id = t.id ?? "";
 
         session.user.role = (t.role ?? "USER") as Role;
-        session.user.accessStatus = (t.accessStatus ?? "ACTIVE") as AccessStatus;
+
+        // ✅ FALLBACK VALIDE (pas "ACTIVE")
+        session.user.accessStatus = (t.accessStatus ?? "GUEST") as AccessStatus;
+
         session.user.username = (t.username ?? null) as string | null;
       }
 
@@ -72,21 +72,14 @@ export const {
 
 /**
  * Route Handlers helper
- * - Compatible App Router: requireUserId(req)
- * - Utilise `auth()` NextAuth v5 (lit cookies/headers automatiquement)
  */
 export async function requireUserId(_req?: NextRequest) {
   const session = await auth();
   const userId = session?.user?.id;
-  if (!userId) {
-    throw new Error("unauthorized");
-  }
+  if (!userId) throw new Error("unauthorized");
   return userId;
 }
 
-/**
- * Si tu veux parfois toute la session côté route handlers
- */
 export async function requireSession(_req?: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) throw new Error("unauthorized");

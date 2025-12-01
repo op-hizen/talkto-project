@@ -12,6 +12,14 @@ declare module "next-auth" {
       username: string | null;
     } & DefaultSession["user"];
   }
+
+  // ✅ AJOUT CRITIQUE : User aussi
+  interface User {
+    id: string;
+    role: Role;
+    accessStatus: AccessStatus;
+    username: string | null;
+  }
 }
 
 declare module "next-auth/jwt" {
