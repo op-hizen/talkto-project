@@ -79,8 +79,6 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
   },
   ref
 ) {
-  /* ---------- STATE ---------- */
-
   const [messages, setMessages] = useState<Message[]>(initialMessages);
 
   const [cursor, setCursor] = useState<string | null>(initialCursor);
@@ -96,14 +94,11 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [newBelowCount, setNewBelowCount] = useState(0);
 
-  // targets venant de la liste
   const [editingTarget, setEditingTarget] = useState<Message | null>(null);
   const [replyTarget, setReplyTarget] = useState<Message | null>(null);
 
   const isSafeDebate = roomSlug === "safe-debate";
   const effectiveUsername = currentUsername ?? "";
-
-  /* ---------- REFS ---------- */
 
   const isNearBottomRef = useRef(true);
   const lastTypingSentRef = useRef<number>(0);
@@ -115,9 +110,10 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
     firstItemIndexRef.current
   );
 
-  // Mention users cache incrémental (pas de scan complet)
   const mentionUsersRef = useRef<Map<string, MentionUser>>(new Map());
-  const prevMsgLenRef = useRef<number>(initialMessages.length);
+  const knownIdsRef = useRef(new Set<string>());
+
+  const sendingRef = useRef(false);
 
   /* ---------- IMPERATIVE API ---------- */
 
@@ -189,7 +185,6 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
         return;
       }
 
-      // prepend older
       startTransition(() => {
         setMessages((prev) => [...older, ...prev]);
       });
@@ -217,6 +212,7 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
   );
 
   const markAllReadIfAtBottom = useCallback(() => {
+    if (sendingRef.current) return; // ✅ évite thrash pendant un send
     if (!messages.length) return;
     flushLastRead(messages[messages.length - 1].createdAt);
   }, [messages, flushLastRead]);
@@ -227,15 +223,12 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
     };
   }, [markAllReadIfAtBottom]);
 
-  /* ---------- MENTION USERS INCREMENTAL (DELTA ONLY) ---------- */
+  /* ---------- MENTION USERS (delta safe) ---------- */
 
   useEffect(() => {
-    const prevLen = prevMsgLenRef.current;
-    const nextLen = messages.length;
-
-    for (let i = prevLen; i < nextLen; i++) {
-      const m = messages[i];
-      if (!m) continue;
+    for (const m of messages) {
+      if (knownIdsRef.current.has(m.id)) continue;
+      knownIdsRef.current.add(m.id);
 
       if (m.author.username) {
         mentionUsersRef.current.set(m.author.id, {
@@ -257,8 +250,6 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
         username: currentUsername,
       });
     }
-
-    prevMsgLenRef.current = nextLen;
   }, [messages, currentUserId, currentUsername]);
 
   const getMentionUsers = useCallback(() => {
@@ -465,6 +456,7 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
         }
       }
 
+      sendingRef.current = true;
       try {
         if (editingId) await editMessageAction(editingId, trimmed);
         else await sendMessageAction(roomId, trimmed, replyToId);
@@ -479,6 +471,8 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
           setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
         });
         throw err;
+      } finally {
+        sendingRef.current = false;
       }
     },
     [
@@ -490,7 +484,6 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
   );
 
   const onDelete = useCallback((id: string) => {
-    // delete optimiste visuel (optionnel mais souvent mieux)
     startTransition(() => {
       setMessages((prev) =>
         prev.map((m) =>
@@ -505,8 +498,6 @@ const ChatRoomClient = forwardRef<ChatRoomHandle, Props>(function ChatRoomClient
     setEditingTarget(null);
     setReplyTarget(null);
   }, []);
-
-  /* ---------- RENDER ---------- */
 
   return (
     <div className="flex flex-col h-full min-h-0 relative overflow-hidden">
