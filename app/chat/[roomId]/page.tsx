@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { redirect, notFound } from "next/navigation";
 import { ChatRoomShell } from "./_components/ChatRoomShell";
-import type { Message } from "./ChatRoomClient";
+import type { Message } from "./chatTypes";
 
 type Params = { roomId: string };
 
