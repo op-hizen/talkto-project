@@ -12,26 +12,34 @@ import { cookies } from "next/headers";
 
 export async function POST(req: Request) {
   try {
-    // ✅ cookies() est async dans ta version Next
+    // ✅ cookies() async chez toi
     const cookieStore = await cookies();
 
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name: string) {
-            return cookieStore.get(name)?.value;
-          },
-          set(name: string, value: string, options: any) {
-            cookieStore.set({ name, value, ...options });
-          },
-          remove(name: string, options: any) {
-            cookieStore.set({ name, value: "", ...options });
-          },
+    // ✅ on utilise les env serveur-only (plus propre)
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseAnon = process.env.SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnon) {
+      console.error("[/api/chat/send] Missing SUPABASE_URL or SUPABASE_ANON_KEY");
+      return NextResponse.json(
+        { error: "Supabase env missing" },
+        { status: 500 }
+      );
+    }
+
+    const supabase = createServerClient(supabaseUrl, supabaseAnon, {
+      cookies: {
+        get(name: string) {
+          return cookieStore.get(name)?.value;
         },
-      }
-    );
+        set(name: string, value: string, options: any) {
+          cookieStore.set({ name, value, ...options });
+        },
+        remove(name: string, options: any) {
+          cookieStore.set({ name, value: "", ...options });
+        },
+      },
+    });
 
     const {
       data: { user },
@@ -68,7 +76,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ ton schema a parentId (threads). On mappe replyToId -> parentId
+    // ✅ replyToId -> parentId (threads)
     const message = await prisma.chatMessage.create({
       data: {
         roomId,
